@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where am I?</title>
+<style>
+  :root {
+    --bg: #eef3ef;
+    --surface: #ffffff;
+    --ink: #14231b;
+    --muted: #5d6f65;
+    --line: #d5e0d8;
+    --accent: #0f6b4a;
+    --accent-ink: #ffffff;
+    --error: #b3261e;
+    --error-bg: #fbeceb;
+    --ok-bg: #e2f2ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1713;
+      --surface: #16221c;
+      --ink: #e8f1ec;
+      --muted: #93a79c;
+      --line: #263a30;
+      --accent: #4fd19b;
+      --accent-ink: #06231a;
+      --error: #ff9b94;
+      --error-bg: #2d1815;
+      --ok-bg: #173226;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    line-height: 1.5;
+    padding: max(20px, env(safe-area-inset-top)) 20px max(28px, env(safe-area-inset-bottom));
+    display: flex;
+    justify-content: center;
+  }
+  main { width: 100%; max-width: 460px; }
+  h1 { font-size: 2rem; font-weight: 600; margin: 8px 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 24px; }
+
+  button, .btn {
+    font: inherit;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 14px 18px;
+    text-decoration: none;
+    text-align: center;
+    display: inline-block;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); width: 100%; font-size: 1.05rem; padding: 18px; }
+  button:disabled { opacity: .6; cursor: progress; }
+  button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .status { margin-top: 16px; padding: 12px 14px; border-radius: 12px; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: .95rem; display: none; }
+  .status.show { display: block; }
+  .status.error { background: var(--error-bg); color: var(--error); }
+  .status.busy { background: var(--ok-bg); color: var(--ink); }
+
+  .result { margin-top: 24px; display: none; }
+  .result.show { display: block; }
+  .coords { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 6px 18px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row dt { color: var(--muted); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: .9rem; }
+  .row dd { margin: 0; font-size: 1.25rem; font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+  dl { margin: 0; }
+
+  .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .actions > * { flex: 1; }
+  .btn.map { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .stamp { color: var(--muted); font-size: .85rem; margin-top: 12px; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+  .note { margin-top: 28px; color: var(--muted); font-size: .85rem; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Where am I?</h1>
+  <p class="lede">Tap the button and allow location access to see your coordinates.</p>
+
+  <button id="go" class="primary" type="button">Get my location</button>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+
+  <section id="result" class="result" aria-live="polite">
+    <dl class="coords">
+      <div class="row"><dt>Latitude</dt><dd id="lat">–</dd></div>
+      <div class="row"><dt>Longitude</dt><dd id="lng">–</dd></div>
+      <div class="row"><dt>Accuracy</dt><dd id="acc">–</dd></div>
+    </dl>
+    <div class="actions">
+      <a id="map" class="btn map" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
+      <button id="copy" type="button">Copy</button>
+    </div>
+    <div id="stamp" class="stamp"></div>
+  </section>
+
+  <p class="note" id="note"></p>
+</main>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var btn = $("go"), statusEl = $("status"), result = $("result");
+  var lastText = "";
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg;
+    statusEl.className = "status show " + kind;
+  }
+  function clearStatus() { statusEl.className = "status"; }
+
+  // Geolocation only works on https:// or localhost
+  if (!window.isSecureContext) {
+    $("note").textContent = "This page isn't served over HTTPS, so most browsers will block location access. Host it on an https:// address or localhost.";
+  }
+  if (!("geolocation" in navigator)) {
+    btn.disabled = true;
+    setStatus("This browser doesn't support the Geolocation API.", "error");
+  }
+
+  var errorHelp = {
+    1: "Permission denied. Allow location access for this site in your browser settings, then try again.",
+    2: "Position unavailable. Check that GPS or location services are turned on.",
+    3: "Timed out after 10 seconds. Move to an open area or try again."
+  };
+
+  function onSuccess(pos) {
+    var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
+    var url = "https://www.google.com/maps/search/" + lat + "," + lng;
+
+    // Original console output kept for desktop debugging
+    console.log("Latitude:", lat);
+    console.log("Longitude:", lng);
+    console.log("Accuracy:", acc, "meters");
+    console.log(url);
+
+    $("lat").textContent = lat.toFixed(6);
+    $("lng").textContent = lng.toFixed(6);
+    $("acc").textContent = "± " + Math.round(acc) + " m";
+    $("map").href = url;
+    $("stamp").textContent = "Fixed at " + new Date(pos.timestamp).toLocaleTimeString();
+    lastText = lat + ", " + lng;
+
+    result.className = "result show";
+    clearStatus();
+    btn.disabled = false;
+    btn.textContent = "Update location";
+  }
+
+  function onError(err) {
+    console.warn("ERROR (" + err.code + "): " + err.message);
+    setStatus((errorHelp[err.code] || "Something went wrong.") + " (code " + err.code + ": " + err.message + ")", "error");
+    btn.disabled = false;
+    btn.textContent = "Try again";
+  }
+
+  btn.addEventListener("click", function () {
+    btn.disabled = true;
+    setStatus("Finding your position…", "busy");
+    navigator.geolocation.getCurrentPosition(onSuccess, onError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    });
+  });
+
+  $("copy").addEventListener("click", function () {
+    var b = $("copy");
+    function done() { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(lastText).then(done, function () {});
+    } else {
+      var t = document.createElement("textarea");
+      t.value = lastText; document.body.appendChild(t); t.select();
+      try { document.execCommand("copy"); done(); } catch (e) {}
+      document.body.removeChild(t);
+    }
+  });
+</script>
+</body>
+</html>
